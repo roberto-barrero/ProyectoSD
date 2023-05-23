@@ -232,16 +232,28 @@ def handle_client(conn, address):
                 else:
                     print("Mensaje recibido: ", message)
         else:
-            # Responder al cliente con la información del destinatario o con un error si el destinatario no esta conectado
-            if connected_clients[recipient] != None:
+            try:
+                connected_clients[recipient]
                 conn.send(generateMessage(
                     json.dumps(connected_clients[recipient]), client_aes_key, client_aes_iv))
-            else:
+            except:
                 conn.send(generateMessage(
                     "Error: The recipient is not connected.", client_aes_key, client_aes_iv))
+                while True:
+                    # Responder al cliente con la información del destinatario o con un error si el destinatario no esta conectado
+                    try:
+                        connected_clients[recipient]
+                        conn.send(generateMessage(
+                            json.dumps(connected_clients[recipient]), client_aes_key, client_aes_iv))
+                        break
+                    except:
+                        None
+
         # Cerrar la conexión con el cliente
         conn.shutdown(socket.SHUT_RDWR)
         conn.close()
+        print("-- " + username + " has disconnected --\n\n")
+        connected_clients.pop(recipient)
 
     except Exception as e:
         print("Error: The client " + str(address) + " has disconnected.\n\n")

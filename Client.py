@@ -36,6 +36,7 @@ import hashlib
 import ecdsa
 import time
 import os
+import traceback
 from Crypto.Cipher import AES
 from colorama import Fore
 
@@ -186,8 +187,14 @@ if recipient == 'server':
 
 else:
     # El cliente recibe la informacion del destinatario del servidor.
-    recipient_info = json.loads(decryptMessage(
-        client_socket.recv(8192), server_ecdsa_public_key, aes_key, aes_iv))
+    data = decryptMessage(
+        client_socket.recv(8192), server_ecdsa_public_key, aes_key, aes_iv)
+    if "Error" in data:
+        print("\nEl destinatario no existe, intentando de nuevo...")
+        data = decryptMessage(
+            client_socket.recv(8192), server_ecdsa_public_key, aes_key, aes_iv)
+
+    recipient_info = json.loads(data)
     # print("Informacion completa del destinatario: ", recipient_info)
     recipient_RSA_public_key = rsa.PublicKey.load_pkcs1(
         bytes.fromhex(recipient_info["public_key"]))
@@ -201,35 +208,38 @@ else:
 
 
 def send_messages(socket, address):
-    # Connect to the other client and send messages
-    socket.connect((address[0], recipient_receiver_port))
+    # Intentar conectarse al otro cliente hasta que se establezca la conexion
     while True:
-        message = input(Fore.GREEN + "Enviar: ")
-        socket.sendall(generateMessage(recipient, message))
+        try:
+            socket.connect((address[0], recipient_receiver_port))
+            break
+        except Exception as e:
+            time.sleep(5)
+            continue
+    print("\n\nInicio de la conversación\n\n")
+    # Enviar mensajes al otro cliente
+    while True:
+        message = input(Fore.GREEN)
+        socket.send(generateMessage(recipient, message))
 
 
 def receive_messages(socket: socket.socket):
-    print(socket, type(socket))
     socket.listen(5)
 
-    # Accept connections from other clients
+    # Aceptar conexiones de otros clientes
     conn, address = socket.accept()
 
-    # Receive messages from other clients
+    # Recibir mensajes de otros clientes
     while True:
         msg_bytes = conn.recv(1024)
         msg = decryptMessage(
             msg_bytes, recipient_ECDSA_public_key, recipient_aes_key, recipient_aes_iv)
-        print(Fore.BLUE + "Mensaje de", recipient, ": ", msg + Fore.GREEN)
+        print(Fore.BLUE + msg + Fore.GREEN)
 
 
 # El cliente comienza a escuchar en el puerto del socket
-
 threading.Thread(target=receive_messages, args=(
     direct_client_socket_rcv,)).start()
-
-# Espera 10 segundos para que el otro cliente comience a escuchar en el puerto del socket
-time.sleep(10)
 
 # Comienza a enviar y recibir mensajes con el otro cliente
 threading.Thread(target=send_messages, args=(
