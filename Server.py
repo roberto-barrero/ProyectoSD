@@ -1,14 +1,21 @@
-# A server that receives a message from a clients and sends it to the recipient
+# Un servidor que recibe un mensaje de los clientes y lo envía al destinatario.
 
-# The clients are connected to the server via a socket, and each client uses an RSA key pair to encrypt and decrypt an AES key.
-# The AES key is used to encrypt and decrypt the messages sent between the clients.
-# The server is responsible for sending the AES key to the recipient of the message.
+# Los clientes se conectan al servidor a través de un socket, y cada cliente utiliza un par de claves
+# RSA para encriptar y desencriptar una clave AES.
 
-# The server is also responsible for storing the messages in a database, and for sending the messages to the recipient when they are online.
-# The server is also responsible for storing the public keys of the clients in a database, and for sending the public keys to the clients when they are online.
-# The server is not responsible for creating or storing the private keys of the clients.
+# La clave AES se utiliza para encriptar y desencriptar los mensajes enviados entre los clientes.
 
-# Importing libraries
+# El servidor es responsable de enviar la clave AES al destinatario del mensaje.
+
+# El servidor también es responsable de almacenar los mensajes en una base de datos y de enviar los
+# mensajes al destinatario cuando están en línea.
+
+# El servidor también es responsable de almacenar las claves públicas de los clientes en una base de
+# datos y de enviar las claves públicas a los clientes cuando están en línea.
+
+# El servidor no es responsable de crear ni almacenar las claves privadas de los clientes.
+
+# Importar las bibliotecas necesarias
 import socket
 import sys
 import threading
@@ -22,17 +29,36 @@ import base64
 import json
 import traceback
 
-# Importing the RSA library
+# Importar las bibliotecas de encriptación
 import rsa
 import ecdsa
-
-# Importing the AES library
 from Crypto.Cipher import AES
-
-# Importing the SHA-256 library
 from Crypto.Hash import SHA256
 
-# The function that is used to create a socket
+# Crear un mensaje
+
+
+def generateMessage(message, aes_key, aes_iv) -> str:
+    cipher = AES.new(aes_key, AES.MODE_EAX, aes_iv)
+    ciphertext = cipher.encrypt(message.encode())
+    return json.dumps({'message': ciphertext.hex(), 'signature': ecdsa_private_key.sign(ciphertext, hashfunc=hashlib.sha256).hex()}).encode()
+
+
+# Desencriptar un mensaje con la llave privada compartida
+def decryptMessage(response, recipient_ECDSA_public_key, aes_key, aes_iv) -> str:
+    cipher = AES.new(aes_key, AES.MODE_EAX, aes_iv)
+    data = json.loads(response.decode())
+    try:
+        signature = bytes.fromhex(data["signature"])
+        ciphertext = bytes.fromhex(data["message"])
+        if recipient_ECDSA_public_key.verify(signature, ciphertext, hashfunc=hashlib.sha256):
+            return cipher.decrypt(ciphertext).decode()
+        else:
+            return False
+    except:
+        return False
+
+# Funcion para crear un socket
 
 
 def create_socket():
@@ -41,19 +67,19 @@ def create_socket():
         global port
         global s
 
-        # The host is the IP address of the server
+        # La dirección IP es la dirección IP del servidor
         host = '127.0.0.1'
 
-        # The port is the port number that the server is listening on
+        # El puerto en el que se escucha la conexión
         port = 9999
 
-        # Creating a socket
+        # Crear un socket
         s = socket.socket()
 
     except socket.error as msg:
         print("Socket creation error: " + str(msg))
 
-# The function that is used to bind the socket to the port
+# La funcion para enlazar el socket
 
 
 def bind_socket():
@@ -62,10 +88,10 @@ def bind_socket():
         global port
         global s
 
-        # Binding the socket to the port
+        # Enlace del socket
         s.bind((host, port))
 
-        # Listening for connections
+        # Escuchar el socket
         s.listen(5)
 
     except socket.error as msg:
@@ -73,21 +99,21 @@ def bind_socket():
         bind_socket()
 
 
-# Generating the public and private RSA keys of the server
+# Generar las claves pública y privada RSA del servidor
 public_key, private_key = rsa.newkeys(1024)
 
-# Generating the public and private AES keys of the server
+# Generar la clave AES y el vector de inicialización
 aes_key = os.urandom(16)
 aes_iv = os.urandom(16)
 
-# Generattin the public and private ECDSA keys of the server
+# Generar la clave privada y pública ECDSA del servidor
 ecdsa_private_key = ecdsa.SigningKey.generate(curve=ecdsa.SECP256k1)
 ecdsa_public_key = ecdsa_private_key.get_verifying_key()
 
-connected_clients = []
+connected_clients = {}
 public_keys = []
 
-# The function that is used to accept connections from multiple clients
+# La funcion para aceptar las conexiones entrantes
 
 
 def accept_connections():
@@ -98,16 +124,13 @@ def accept_connections():
         # Accepting a connection from a client
         conn, address = s.accept()
 
-        # Storing the IP address and port number of the client in a list
-        connected_clients.append(address)
-
         # Creating a thread for the client
         thread = threading.Thread(target=handle_client, args=(conn, address))
 
         # Starting the thread
         thread.start()
 
-# The function that is used to handle a client
+# La funcion para manejar los clientes
 
 
 def handle_client(conn, address):
@@ -158,30 +181,73 @@ def handle_client(conn, address):
                 "Error: The signature is invalid.", client_public_key)}))
             conn.close()
 
-        # Almacenar la clave pública RSA del cliente en una lista
-        public_keys.append((address, public_key))
-        cipher = AES.new(client_aes_key, AES.MODE_EAX, client_aes_iv)
+        # Responder al cliente con una confirmación
+        conn.send(generateMessage("OK", client_aes_key, client_aes_iv))
+
+        # Recibir los puertos del cliente
+        bytes_msg = conn.recv(1024)
+        message = json.loads(decryptMessage(
+            bytes_msg, client_ecdsa_public_key, client_aes_key, client_aes_iv))
+        client_sender_port = message["send"]
+        client_receiver_port = message["receive"]
+        print("Puertos recibidos: ", client_sender_port, client_receiver_port)
 
         # Responder al cliente con una confirmación
-        conn.send(generateMessage("OK", cipher))
+        conn.send(generateMessage("OK", client_aes_key, client_aes_iv))
 
-        # Responding to the client with the public keys of the other clients
-        # conn.send(generateMessage(json.dumps(public_keys), cipher))
-        # The infinite loop that is used to handle a client
-        while True:
-            None
+        # Recibir el nombre de usuario del cliente
+        bytes_msg = conn.recv(1024)
+        print("Recibiendo el nombre de usuario del cliente ", bytes_msg)
+        username = decryptMessage(
+            bytes_msg, client_ecdsa_public_key, client_aes_key, client_aes_iv)
+        print("Nombre de usuario recibido: ", username)
+
+        # Responder al cliente con una confirmación
+        conn.send(generateMessage(
+            username, client_aes_key, client_aes_iv))
+
+        # Almacenar la informacion del cliente
+        connected_clients[username] = {"address": address, "public_key": client_public_key.save_pkcs1().hex(
+        ), "ecdsa_public_key": client_ecdsa_public_key.to_string().hex(), "aes_key": client_aes_key.hex(), "aes_iv": client_aes_iv.hex(), "send_port": client_sender_port, "receive_port": client_receiver_port}
+
+        # Recibir destinatario del cliente
+        bytes_msg = conn.recv(1024)
+        recipient = decryptMessage(
+            bytes_msg, client_ecdsa_public_key, client_aes_key, client_aes_iv)
+        print("Destinatario recibido: ", recipient)
+
+        if recipient == 'server':
+            while True:
+                # Responder al cliente con OK
+                conn.send(generateMessage("OK", client_aes_key, client_aes_iv))
+
+                # Recibir el mensaje del cliente
+                bytes_msg = conn.recv(1024)
+                print("Recibiendo el mensaje del cliente ", bytes_msg)
+                message = decryptMessage(
+                    bytes_msg, client_ecdsa_public_key, client_aes_key, client_aes_iv)
+                if message == 'exit':
+                    print("Cerrando conexxion...")
+                    break
+                else:
+                    print("Mensaje recibido: ", message)
+        else:
+            # Responder al cliente con la información del destinatario o con un error si el destinatario no esta conectado
+            if connected_clients[recipient] != None:
+                conn.send(generateMessage(
+                    json.dumps(connected_clients[recipient]), client_aes_key, client_aes_iv))
+            else:
+                conn.send(generateMessage(
+                    "Error: The recipient is not connected.", client_aes_key, client_aes_iv))
+        # Cerrar la conexión con el cliente
+        conn.shutdown(socket.SHUT_RDWR)
+        conn.close()
+
     except Exception as e:
         print("Error: The client " + str(address) + " has disconnected.\n\n")
         conn.close()
         print(e)
         traceback.print_exc()
-
-# The function that is used to create a message for a client
-
-
-def generateMessage(message, cipher):
-    ciphertext = cipher.encrypt(message.encode())
-    return json.dumps({'message': ciphertext.hex(), 'signature': ecdsa_private_key.sign(ciphertext, hashfunc=hashlib.sha256).hex()}).encode()
 
 
 def main():
